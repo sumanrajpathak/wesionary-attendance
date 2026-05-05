@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "480918231151",
+    "project_id": "wesionary-attendance",
+    "storage_bucket": "wesionary-attendance.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:480918231151:android:77f0acbbeab8493c25959a",
+        "android_client_info": {
+          "package_name": "com.wesionaryteam.attendance"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBLVHG77CnS93BJja0h7gY3LIJQGFDh9xY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
