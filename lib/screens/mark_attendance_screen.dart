@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/attendance_provider.dart';
+import '../widgets/ui.dart';
 
 class MarkAttendanceScreen extends StatelessWidget {
   const MarkAttendanceScreen({super.key});
@@ -12,9 +13,16 @@ class MarkAttendanceScreen extends StatelessWidget {
     final provider = context.watch<AttendanceProvider>();
 
     if (!provider.isConfigured) {
-      return const _ErrorState(
-        message:
+      return EmptyState(
+        icon: Icons.settings_suggest_outlined,
+        title: 'Setup needed',
+        subtitle:
             'APPS_SCRIPT_URL is missing from .env. Add it and rebuild the app.',
+        action: FilledButton.icon(
+          onPressed: () => provider.refresh(),
+          icon: const Icon(Icons.refresh),
+          label: const Text('Retry'),
+        ),
       );
     }
 
@@ -23,111 +31,94 @@ class MarkAttendanceScreen extends StatelessWidget {
     }
 
     if (provider.state == LoadState.error && provider.employees.isEmpty) {
-      return _ErrorState(message: provider.error ?? 'Failed to load');
+      return ErrorStateView(
+        message: friendlyError(provider.error ?? 'Failed to load'),
+        onRetry: () => provider.refresh(),
+      );
     }
 
     if (provider.employees.isEmpty) {
-      return _EmptyEmployees();
+      return EmptyState(
+        icon: Icons.people_outline,
+        title: 'No employees yet',
+        subtitle:
+            'Add rows to the "Employees" sheet (ID, Name) and reload.',
+        action: FilledButton.icon(
+          onPressed: () => provider.refresh(),
+          icon: const Icon(Icons.refresh),
+          label: const Text('Reload'),
+        ),
+      );
     }
 
     return Column(
-      children: [
+      children: const [
         _DateBar(),
         Expanded(child: _EmployeeList()),
-        const _SubmitBar(),
+        _SubmitBar(),
       ],
     );
   }
 }
 
-class _ErrorState extends StatelessWidget {
-  final String message;
-  const _ErrorState({required this.message});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(24),
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.error_outline, size: 56, color: Colors.red),
-            const SizedBox(height: 12),
-            Text(message, textAlign: TextAlign.center),
-            const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: () =>
-                  context.read<AttendanceProvider>().refresh(),
-              icon: const Icon(Icons.refresh),
-              label: const Text('Retry'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _EmptyEmployees extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(24),
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.people_outline, size: 56, color: Colors.grey),
-            const SizedBox(height: 12),
-            const Text(
-              'No employees found.\n'
-              'Add rows to the "Employees" sheet (ID, Name) and reload.',
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: () =>
-                  context.read<AttendanceProvider>().refresh(),
-              icon: const Icon(Icons.refresh),
-              label: const Text('Reload'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class _DateBar extends StatelessWidget {
+  const _DateBar();
+
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final provider = context.watch<AttendanceProvider>();
-    final fmt = DateFormat('EEE, MMM d, yyyy').format(provider.selectedDate);
+    final today = DateTime.now();
+    final isToday = provider.selectedDate.year == today.year &&
+        provider.selectedDate.month == today.month &&
+        provider.selectedDate.day == today.day;
+    final primary =
+        isToday ? 'Today' : DateFormat('EEEE').format(provider.selectedDate);
+    final secondary =
+        DateFormat('MMM d, yyyy').format(provider.selectedDate);
     final count = provider.selectedIds.length;
     final total = provider.employees.length;
 
-    return Material(
-      color: Theme.of(context).colorScheme.surfaceContainerHighest,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+    final hp = responsiveHorizontalPadding(context);
+    return Padding(
+      padding: EdgeInsets.fromLTRB(hp.left, 16, hp.right, 8),
+      child: AppCard(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         child: Row(
           children: [
-            const Icon(Icons.event, size: 20),
-            const SizedBox(width: 8),
+            Container(
+              width: 44,
+              height: 44,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: theme.colorScheme.primaryContainer,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(Icons.event,
+                  color: theme.colorScheme.onPrimaryContainer),
+            ),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(fmt, style: const TextStyle(fontWeight: FontWeight.w600)),
-                  Text('$count present, ${total - count} absent',
-                      style: const TextStyle(fontSize: 12)),
+                  Text(primary,
+                      style: theme.textTheme.titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 2),
+                  Text(
+                    '$secondary • $count of $total selected',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
                 ],
               ),
             ),
-            TextButton(
+            TextButton.icon(
               onPressed: () => _pickDate(context),
-              child: const Text('Change'),
+              icon: const Icon(Icons.edit_calendar_outlined, size: 18),
+              label: const Text('Change'),
             ),
           ],
         ),
@@ -147,76 +138,206 @@ class _DateBar extends StatelessWidget {
   }
 }
 
-class _EmployeeList extends StatelessWidget {
+class _EmployeeList extends StatefulWidget {
+  const _EmployeeList();
+
+  @override
+  State<_EmployeeList> createState() => _EmployeeListState();
+}
+
+class _EmployeeListState extends State<_EmployeeList> {
+  String _query = '';
+
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<AttendanceProvider>();
-    final employees = provider.employees;
+    final theme = Theme.of(context);
+    final hp = responsiveHorizontalPadding(context);
+    final all = provider.employees;
+    final filtered = all
+        .where((e) => matchesQuery(_query, name: e.name, id: e.id))
+        .toList();
 
     return RefreshIndicator(
       onRefresh: () => provider.refresh(),
       child: Column(
         children: [
-          _Toolbar(),
-          Expanded(
-            child: ListView.builder(
-              physics: const AlwaysScrollableScrollPhysics(),
-              itemCount: employees.length,
-              itemBuilder: (context, index) {
-                final emp = employees[index];
-                final selected = provider.selectedIds.contains(emp.id);
-                final markedToday = provider.isMarkedToday(emp.id);
-                return CheckboxListTile(
-                  value: selected,
-                  onChanged: (_) => provider.toggleSelection(emp.id),
-                  title: Text(emp.name.isEmpty ? '(no name)' : emp.name),
-                  subtitle: Text(
-                    'ID: ${emp.id}'
-                    '${markedToday ? ' • already marked today' : ''}',
-                    style: TextStyle(
-                      color: markedToday ? Colors.orange.shade800 : null,
-                    ),
-                  ),
-                  secondary: CircleAvatar(
-                    child: Text(_initials(emp.name)),
-                  ),
-                );
-              },
+          Padding(
+            padding: EdgeInsets.fromLTRB(hp.left, 8, hp.right, 4),
+            child: SearchField(
+              hint: 'Search by name or ID',
+              onChanged: (v) => setState(() => _query = v),
             ),
+          ),
+          const _Toolbar(),
+          Expanded(
+            child: filtered.isEmpty
+                ? const EmptyState(
+                    icon: Icons.search_off,
+                    title: 'No matches',
+                    subtitle: 'Try a different name or ID.',
+                  )
+                : ListView.builder(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: EdgeInsets.fromLTRB(hp.left, 4, hp.right, 16),
+                    itemCount: 1,
+                    itemBuilder: (context, _) {
+                      return AppCard(
+                        child: Column(
+                          children: [
+                            for (var index = 0; index < filtered.length; index++) ...[
+                              _EmployeeTile(
+                                name: filtered[index].name.isEmpty
+                                    ? '(no name)'
+                                    : filtered[index].name,
+                                id: filtered[index].id,
+                                selected: provider.selectedIds
+                                    .contains(filtered[index].id),
+                                markedToday:
+                                    provider.isMarkedToday(filtered[index].id),
+                                isFirst: index == 0,
+                                isLast: index == filtered.length - 1,
+                                onTap: () => provider
+                                    .toggleSelection(filtered[index].id),
+                              ),
+                              if (index < filtered.length - 1)
+                                Divider(
+                                  height: 1,
+                                  thickness: 1,
+                                  indent: 68,
+                                  endIndent: 16,
+                                  color: theme.colorScheme.outlineVariant
+                                      .withValues(alpha: 0.4),
+                                ),
+                            ],
+                          ],
+                        ),
+                      );
+                    },
+                  ),
           ),
         ],
       ),
     );
   }
+}
 
-  String _initials(String name) {
-    final parts = name.trim().split(RegExp(r'\s+'));
-    if (parts.isEmpty || parts.first.isEmpty) return '?';
-    if (parts.length == 1) return parts.first.substring(0, 1).toUpperCase();
-    return (parts.first[0] + parts.last[0]).toUpperCase();
+class _EmployeeTile extends StatelessWidget {
+  final String name;
+  final String id;
+  final bool selected;
+  final bool markedToday;
+  final bool isFirst;
+  final bool isLast;
+  final VoidCallback onTap;
+
+  const _EmployeeTile({
+    required this.name,
+    required this.id,
+    required this.selected,
+    required this.markedToday,
+    required this.onTap,
+    this.isFirst = false,
+    this.isLast = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final radius = BorderRadius.vertical(
+      top: Radius.circular(isFirst ? kCardRadius : 0),
+      bottom: Radius.circular(isLast ? kCardRadius : 0),
+    );
+    return Material(
+      color: selected
+          ? theme.colorScheme.primaryContainer.withValues(alpha: 0.45)
+          : Colors.transparent,
+      borderRadius: radius,
+      child: InkWell(
+        borderRadius: radius,
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 14, 10),
+          child: Row(
+            children: [
+              AppAvatar(name: name),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(name,
+                        style: theme.textTheme.bodyLarge
+                            ?.copyWith(fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 2),
+                    Row(
+                      children: [
+                        Text('ID $id',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            )),
+                        if (markedToday) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF59E0B)
+                                  .withValues(alpha: 0.18),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              'marked today',
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: const Color(0xFFB45309),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              Checkbox(
+                value: selected,
+                onChanged: (_) => onTap(),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(6),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
 class _Toolbar extends StatelessWidget {
+  const _Toolbar();
+
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<AttendanceProvider>();
+    final hp = responsiveHorizontalPadding(context);
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: EdgeInsets.fromLTRB(hp.left, 4, hp.right, 4),
       child: Row(
         children: [
           TextButton.icon(
             onPressed: provider.employees.isEmpty
                 ? null
                 : () => provider.selectAll(),
-            icon: const Icon(Icons.select_all),
+            icon: const Icon(Icons.select_all, size: 18),
             label: const Text('Select all'),
           ),
           TextButton.icon(
             onPressed: provider.selectedIds.isEmpty
                 ? null
                 : () => provider.clearSelection(),
-            icon: const Icon(Icons.clear),
+            icon: const Icon(Icons.clear, size: 18),
             label: const Text('Clear'),
           ),
           const Spacer(),
@@ -244,37 +365,45 @@ class _SubmitBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final provider = context.watch<AttendanceProvider>();
     final present = provider.selectedIds.length;
     final total = provider.employees.length;
     final absent = total - present;
     final canSubmit = total > 0 && !provider.submitting;
 
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: SizedBox(
-          width: double.infinity,
-          child: FilledButton.icon(
-            onPressed: canSubmit ? () => _submit(context) : null,
-            icon: provider.submitting
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.white,
-                    ),
-                  )
-                : const Icon(Icons.cloud_upload),
-            label: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              child: Text(
+    return Material(
+      color: theme.colorScheme.surface,
+      elevation: 8,
+      shadowColor: Colors.black.withValues(alpha: 0.06),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+            responsiveHorizontalPadding(context).left,
+            12,
+            responsiveHorizontalPadding(context).right,
+            12,
+          ),
+          child: SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: canSubmit ? () => _submit(context) : null,
+              icon: provider.submitting
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Icon(Icons.cloud_upload_outlined),
+              label: Text(
                 provider.submitting
                     ? 'Submitting…'
-                    : 'Submit ($present P / $absent A)',
-                style: const TextStyle(fontSize: 16),
+                    : 'Submit  •  $present present, $absent absent',
+                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
               ),
             ),
           ),
@@ -285,19 +414,21 @@ class _SubmitBar extends StatelessWidget {
 
   Future<void> _submit(BuildContext context) async {
     final provider = context.read<AttendanceProvider>();
-    final messenger = ScaffoldMessenger.of(context);
     try {
-      final n = await provider.submitAttendance();
-      messenger.showSnackBar(
-        SnackBar(content: Text('Recorded $n entries')),
-      );
+      final result = await provider.submitAttendance();
+      if (!context.mounted) return;
+      final people = result.count == 1 ? '1 person' : '${result.count} people';
+      if (result.queued) {
+        showInfoSnack(
+          context,
+          "You're offline. Saved for $people locally — will sync when online.",
+        );
+      } else {
+        showSuccessSnack(context, 'Attendance saved for $people.');
+      }
     } catch (e) {
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text('Failed: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      if (!context.mounted) return;
+      showErrorSnack(context, e);
     }
   }
 }

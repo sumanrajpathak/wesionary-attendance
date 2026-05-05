@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -10,6 +12,44 @@ import '../models/user_session.dart';
 import '../services/sheets_api_service.dart';
 
 enum LoadState { idle, loading, ready, error }
+
+class SubmitResult {
+  final int count;
+  final bool queued;
+  const SubmitResult({required this.count, required this.queued});
+}
+
+class _PendingBatch {
+  final String id;
+  final List<AttendanceRecord> records;
+  final String adminEmail;
+  final DateTime queuedAt;
+
+  _PendingBatch({
+    required this.id,
+    required this.records,
+    required this.adminEmail,
+    required this.queuedAt,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'adminEmail': adminEmail,
+        'queuedAt': queuedAt.toIso8601String(),
+        'records': records.map((r) => r.toJson()).toList(),
+      };
+
+  factory _PendingBatch.fromJson(Map<String, dynamic> json) => _PendingBatch(
+        id: (json['id'] ?? '').toString(),
+        adminEmail: (json['adminEmail'] ?? '').toString(),
+        queuedAt: DateTime.tryParse(json['queuedAt']?.toString() ?? '') ??
+            DateTime.now(),
+        records: ((json['records'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((m) => AttendanceRecord.fromJson(Map<String, dynamic>.from(m)))
+            .toList(),
+      );
+}
 
 class EmployeeMonthSummary {
   final String employeeId;
@@ -43,16 +83,19 @@ class AttendanceProvider extends ChangeNotifier {
 
   static const _kEmployees = 'cache_employees_v2';
   static const _kHistory = 'cache_history_v2';
+  static const _kPending = 'pending_batches_v1';
 
   UserSession? _actor;
   List<Employee> _employees = [];
   List<AttendanceRecord> _history = [];
   final Set<String> _selected = {};
   DateTime _selectedDate = DateTime.now();
+  final List<_PendingBatch> _pending = [];
 
   LoadState _state = LoadState.idle;
   String? _error;
   bool _submitting = false;
+  bool _syncing = false;
 
   UserSession? get actor => _actor;
   List<Employee> get employees => List.unmodifiable(_employees);
@@ -62,6 +105,9 @@ class AttendanceProvider extends ChangeNotifier {
   LoadState get state => _state;
   String? get error => _error;
   bool get submitting => _submitting;
+  bool get syncing => _syncing;
+  int get pendingCount => _pending.length;
+  bool get hasPending => _pending.isNotEmpty;
   bool get isConfigured => _service.isConfigured;
   String? get endpointUrl => _service.baseUrl;
   SheetsApiService get service => _service;
@@ -79,6 +125,7 @@ class AttendanceProvider extends ChangeNotifier {
       return;
     }
     await _restoreCache();
+    await _restorePending();
     if (_service.isConfigured) {
       await refresh();
     } else {
@@ -110,6 +157,7 @@ class AttendanceProvider extends ChangeNotifier {
       _selected.removeWhere(
         (id) => !_employees.any((e) => e.id == id),
       );
+      _reapplyPendingToHistory();
       await _persistCache();
       _state = LoadState.ready;
     } catch (e) {
@@ -117,6 +165,9 @@ class AttendanceProvider extends ChangeNotifier {
       _state = LoadState.error;
     }
     notifyListeners();
+    if (_pending.isNotEmpty && actor.isAdmin) {
+      unawaited(retryPendingSync());
+    }
   }
 
   void toggleSelection(String id) {
@@ -145,12 +196,14 @@ class AttendanceProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<int> submitAttendance() async {
+  Future<SubmitResult> submitAttendance() async {
     final admin = _actor;
     if (admin == null || !admin.isAdmin) {
       throw SheetsApiException('Admin login required to submit attendance.');
     }
-    if (_submitting || _employees.isEmpty) return 0;
+    if (_submitting || _employees.isEmpty) {
+      return const SubmitResult(count: 0, queued: false);
+    }
     _submitting = true;
     _error = null;
     notifyListeners();
@@ -176,24 +229,121 @@ class AttendanceProvider extends ChangeNotifier {
     try {
       final count =
           await _service.markAttendance(records, adminEmail: admin.email);
-      _history.removeWhere(
-        (r) =>
-            r.date.year == date.year &&
-            r.date.month == date.month &&
-            r.date.day == date.day,
-      );
-      _history.insertAll(0, records.map((r) => r.copyWith(synced: true)));
-      _history.sort((a, b) => b.date.compareTo(a.date));
+      _replaceDayInHistory(date, records.map((r) => r.copyWith(synced: true)));
       _selected.clear();
       await _persistCache();
-      return count;
+      return SubmitResult(count: count, queued: false);
     } catch (e) {
+      if (_isTransient(e)) {
+        // Save locally and queue for retry — admin's data isn't lost.
+        _replaceDayInHistory(date, records);
+        await _enqueue(_PendingBatch(
+          id: '${DateTime.now().microsecondsSinceEpoch}',
+          records: records,
+          adminEmail: admin.email,
+          queuedAt: DateTime.now(),
+        ));
+        _selected.clear();
+        await _persistCache();
+        return SubmitResult(count: records.length, queued: true);
+      }
       _error = e.toString();
       rethrow;
     } finally {
       _submitting = false;
       notifyListeners();
     }
+  }
+
+  Future<int> retryPendingSync() async {
+    if (_syncing || _pending.isEmpty) return 0;
+    final admin = _actor;
+    if (admin == null || !admin.isAdmin) return 0;
+    _syncing = true;
+    notifyListeners();
+    var sent = 0;
+    final remaining = <_PendingBatch>[];
+    for (final batch in _pending) {
+      try {
+        await _service.markAttendance(batch.records,
+            adminEmail: batch.adminEmail);
+        _replaceDayFromBatch(batch);
+        sent += batch.records.length;
+      } catch (e) {
+        if (_isTransient(e)) {
+          remaining.add(batch);
+        } else {
+          // Permanent failure — drop the batch so it doesn't loop forever.
+          // The locally-applied records stay visible but unsynced.
+          continue;
+        }
+      }
+    }
+    _pending
+      ..clear()
+      ..addAll(remaining);
+    await _persistPending();
+    await _persistCache();
+    _syncing = false;
+    notifyListeners();
+    return sent;
+  }
+
+  bool _isTransient(Object error) {
+    if (error is http.ClientException) return true;
+    final msg = error.toString().toLowerCase();
+    return msg.contains('socketexception') ||
+        msg.contains('failed host lookup') ||
+        msg.contains('clientexception') ||
+        msg.contains('connection') ||
+        msg.contains('timeout') ||
+        msg.contains('handshake') ||
+        msg.contains('http 5'); // 5xx server errors
+  }
+
+  void _replaceDayInHistory(
+    DateTime date,
+    Iterable<AttendanceRecord> newRecords,
+  ) {
+    _history.removeWhere(
+      (r) =>
+          r.date.year == date.year &&
+          r.date.month == date.month &&
+          r.date.day == date.day,
+    );
+    _history.insertAll(0, newRecords);
+    _history.sort((a, b) => b.date.compareTo(a.date));
+  }
+
+  void _replaceDayFromBatch(_PendingBatch batch) {
+    if (batch.records.isEmpty) return;
+    final date = batch.records.first.date;
+    _replaceDayInHistory(
+      date,
+      batch.records.map((r) => r.copyWith(synced: true)),
+    );
+  }
+
+  void _reapplyPendingToHistory() {
+    for (final batch in _pending) {
+      if (batch.records.isEmpty) continue;
+      final date = batch.records.first.date;
+      _replaceDayInHistory(date, batch.records);
+    }
+  }
+
+  Future<void> _enqueue(_PendingBatch batch) async {
+    // Keep only the latest batch per day to avoid unbounded growth.
+    final date = batch.records.isEmpty ? null : batch.records.first.date;
+    if (date != null) {
+      _pending.removeWhere((b) =>
+          b.records.isNotEmpty &&
+          b.records.first.date.year == date.year &&
+          b.records.first.date.month == date.month &&
+          b.records.first.date.day == date.day);
+    }
+    _pending.add(batch);
+    await _persistPending();
   }
 
   Future<void> clearLocalCache() async {
@@ -340,6 +490,32 @@ class AttendanceProvider extends ChangeNotifier {
       } catch (_) {
         _history = [];
       }
+    }
+  }
+
+  Future<void> _persistPending() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _kPending,
+      jsonEncode(_pending.map((b) => b.toJson()).toList()),
+    );
+  }
+
+  Future<void> _restorePending() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_kPending);
+    if (raw == null) return;
+    try {
+      final list = jsonDecode(raw) as List;
+      _pending
+        ..clear()
+        ..addAll(
+          list.whereType<Map>().map(
+                (m) => _PendingBatch.fromJson(Map<String, dynamic>.from(m)),
+              ),
+        );
+    } catch (_) {
+      _pending.clear();
     }
   }
 }

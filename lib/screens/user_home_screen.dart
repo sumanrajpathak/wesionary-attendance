@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../models/attendance_record.dart';
 import '../providers/attendance_provider.dart';
 import '../providers/auth_provider.dart';
+import '../widgets/ui.dart';
 
 class UserHomeScreen extends StatefulWidget {
   const UserHomeScreen({super.key});
@@ -24,30 +25,37 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('My Attendance'),
-        actions: [
-          IconButton(
-            tooltip: 'Refresh',
-            icon: provider.state == LoadState.loading
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.white,
-                    ),
-                  )
-                : const Icon(Icons.refresh),
-            onPressed: provider.state == LoadState.loading
-                ? null
-                : () => provider.refresh(),
+        automaticallyImplyLeading: false,
+        titleSpacing: 0,
+        title: ResponsiveCenter(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                const Expanded(child: Text('My Attendance')),
+                IconButton(
+                  tooltip: 'Refresh',
+                  icon: provider.state == LoadState.loading
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.refresh),
+                  onPressed: provider.state == LoadState.loading
+                      ? null
+                      : () => provider.refresh(),
+                ),
+                const ThemeToggleButton(),
+                IconButton(
+                  tooltip: 'Sign out',
+                  icon: const Icon(Icons.logout),
+                  onPressed: () => _confirmLogout(context),
+                ),
+              ],
+            ),
           ),
-          IconButton(
-            tooltip: 'Sign out',
-            icon: const Icon(Icons.logout),
-            onPressed: () => _confirmLogout(context),
-          ),
-        ],
+        ),
       ),
       body: Builder(
         builder: (context) {
@@ -58,7 +66,10 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
           }
 
           if (provider.state == LoadState.error && provider.history.isEmpty) {
-            return _ErrorState(message: provider.error ?? 'Failed to load');
+            return ErrorStateView(
+              message: friendlyError(provider.error ?? 'Failed to load'),
+              onRetry: () => provider.refresh(),
+            );
           }
 
           final months = provider.availableMonths();
@@ -78,23 +89,48 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
             onRefresh: () => provider.refresh(),
             child: ListView(
               physics: const AlwaysScrollableScrollPhysics(),
+              padding: responsivePagePadding(context),
               children: [
                 _ProfileHeader(name: user.name, email: user.email),
-                _MonthBar(
+                const SizedBox(height: 16),
+                MonthSelector(
                   months: months,
                   selected: selected,
                   onChanged: (m) => setState(() => _selectedMonth = m),
                 ),
+                const SizedBox(height: 16),
                 _SummaryCard(summary: summary),
+                const SizedBox(height: 16),
                 if (dayList.isEmpty)
                   const Padding(
-                    padding: EdgeInsets.all(24),
-                    child: Center(
-                      child: Text('No attendance recorded for this month yet.'),
+                    padding: EdgeInsets.symmetric(vertical: 40),
+                    child: EmptyState(
+                      icon: Icons.event_busy_outlined,
+                      title: 'No attendance recorded',
+                      subtitle: 'No entries for this month yet.',
                     ),
                   )
                 else
-                  ..._buildDayTiles(dayList),
+                  AppCard(
+                    child: Column(
+                      children: [
+                        for (var i = 0; i < dayList.length; i++) ...[
+                          _DayRow(record: dayList[i]),
+                          if (i < dayList.length - 1)
+                            Divider(
+                              height: 1,
+                              thickness: 1,
+                              indent: 16,
+                              endIndent: 16,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .outlineVariant
+                                  .withValues(alpha: 0.4),
+                            ),
+                        ],
+                      ],
+                    ),
+                  ),
               ],
             ),
           );
@@ -113,26 +149,6 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
       return s;
     }
     return months.first;
-  }
-
-  List<Widget> _buildDayTiles(List<AttendanceRecord> records) {
-    return records.map((r) {
-      final isPresent = r.status == AttendanceStatus.present;
-      return ListTile(
-        leading: Icon(
-          isPresent ? Icons.check_circle : Icons.cancel,
-          color: isPresent ? Colors.green : Colors.red,
-        ),
-        title: Text(DateFormat('EEEE, MMM d, yyyy').format(r.date)),
-        trailing: Text(
-          isPresent ? 'Present' : 'Absent',
-          style: TextStyle(
-            color: isPresent ? Colors.green.shade800 : Colors.red.shade800,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      );
-    }).toList();
   }
 
   Future<void> _confirmLogout(BuildContext context) async {
@@ -159,6 +175,47 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
   }
 }
 
+class _DayRow extends StatelessWidget {
+  final AttendanceRecord record;
+  const _DayRow({required this.record});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isPresent = record.status == AttendanceStatus.present;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  DateFormat('EEEE').format(record.date),
+                  style: theme.textTheme.bodyLarge
+                      ?.copyWith(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  DateFormat('MMM d, yyyy').format(record.date),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          StatusChip(
+            label: isPresent ? 'Present' : 'Absent',
+            present: isPresent,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ProfileHeader extends StatelessWidget {
   final String name;
   final String email;
@@ -166,92 +223,33 @@ class _ProfileHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+    final theme = Theme.of(context);
+    return AppCard(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
       child: Row(
         children: [
-          CircleAvatar(
-            radius: 28,
-            child: Text(_initials(name), style: const TextStyle(fontSize: 20)),
-          ),
-          const SizedBox(width: 12),
+          AppAvatar(name: name.isEmpty ? '?' : name, size: 56),
+          const SizedBox(width: 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   name.isEmpty ? '(no name)' : name,
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                  style: theme.textTheme.titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w700),
                 ),
+                const SizedBox(height: 2),
                 Text(
                   email,
-                  style: const TextStyle(color: Colors.black54),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
                 ),
               ],
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  String _initials(String name) {
-    final parts = name.trim().split(RegExp(r'\s+'));
-    if (parts.isEmpty || parts.first.isEmpty) return '?';
-    if (parts.length == 1) return parts.first.substring(0, 1).toUpperCase();
-    return (parts.first[0] + parts.last[0]).toUpperCase();
-  }
-}
-
-class _MonthBar extends StatelessWidget {
-  final List<DateTime> months;
-  final DateTime selected;
-  final ValueChanged<DateTime> onChanged;
-
-  const _MonthBar({
-    required this.months,
-    required this.selected,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Theme.of(context).colorScheme.surfaceContainerHighest,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Row(
-          children: [
-            const Icon(Icons.calendar_month, size: 20),
-            const SizedBox(width: 8),
-            Expanded(
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<DateTime>(
-                  value: months.any(
-                          (m) => m.year == selected.year && m.month == selected.month)
-                      ? selected
-                      : null,
-                  isExpanded: true,
-                  hint: Text(DateFormat('MMMM yyyy').format(selected)),
-                  items: months
-                      .map(
-                        (m) => DropdownMenuItem<DateTime>(
-                          value: m,
-                          child: Text(
-                            DateFormat('MMMM yyyy').format(m),
-                            style: const TextStyle(fontWeight: FontWeight.w600),
-                          ),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (v) {
-                    if (v != null) onChanged(v);
-                  },
-                ),
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -265,23 +263,45 @@ class _SummaryCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = summary;
     if (s == null) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-      child: Card(
-        elevation: 0,
-        color: Theme.of(context).colorScheme.primaryContainer,
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              _Stat(label: 'Present', value: '${s.present}', color: Colors.green),
-              _Stat(label: 'Absent', value: '${s.absent}', color: Colors.red),
-              _Stat(label: 'Recorded', value: '${s.recordedDays}'),
-            ],
-          ),
-        ),
+    return AppCard(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 18),
+      child: Row(
+        children: [
+          Expanded(
+              child: _Stat(
+            label: 'Present',
+            value: '${s.present}',
+            color: const Color(0xFF10B981),
+          )),
+          _Divider(),
+          Expanded(
+              child: _Stat(
+            label: 'Absent',
+            value: '${s.absent}',
+            color: const Color(0xFFEF4444),
+          )),
+          _Divider(),
+          Expanded(
+              child: _Stat(
+            label: 'Recorded',
+            value: '${s.recordedDays}',
+          )),
+        ],
       ),
+    );
+  }
+}
+
+class _Divider extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 1,
+      height: 36,
+      color: Theme.of(context)
+          .colorScheme
+          .outlineVariant
+          .withValues(alpha: 0.5),
     );
   }
 }
@@ -294,47 +314,25 @@ class _Stat extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Column(
       children: [
         Text(
           value,
-          style: TextStyle(
-            fontSize: 24,
-            fontWeight: FontWeight.w700,
-            color: color,
+          style: theme.textTheme.headlineSmall?.copyWith(
+            fontWeight: FontWeight.w800,
+            color: color ?? theme.colorScheme.onSurface,
           ),
         ),
-        const SizedBox(height: 2),
-        Text(label, style: const TextStyle(fontSize: 12)),
-      ],
-    );
-  }
-}
-
-class _ErrorState extends StatelessWidget {
-  final String message;
-  const _ErrorState({required this.message});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(24),
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.error_outline, size: 56, color: Colors.red),
-            const SizedBox(height: 12),
-            Text(message, textAlign: TextAlign.center),
-            const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: () => context.read<AttendanceProvider>().refresh(),
-              icon: const Icon(Icons.refresh),
-              label: const Text('Retry'),
-            ),
-          ],
+        const SizedBox(height: 4),
+        Text(
+          label,
+          style: theme.textTheme.labelMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+            fontWeight: FontWeight.w600,
+          ),
         ),
-      ),
+      ],
     );
   }
 }

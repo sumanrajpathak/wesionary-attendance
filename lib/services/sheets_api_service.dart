@@ -13,7 +13,7 @@ class SheetsApiException implements Exception {
   final String message;
   SheetsApiException(this.message);
   @override
-  String toString() => 'SheetsApiException: $message';
+  String toString() => message;
 }
 
 class SheetsApiService {
@@ -209,7 +209,22 @@ class SheetsApiService {
 
   Map<String, dynamic> _decode(http.Response res) {
     if (res.statusCode < 200 || res.statusCode >= 300) {
-      throw SheetsApiException('HTTP ${res.statusCode}: ${res.body}');
+      if (res.statusCode == 401 || res.statusCode == 403) {
+        throw SheetsApiException(
+          "You're not authorized to access this sheet.",
+        );
+      }
+      if (res.statusCode == 404) {
+        throw SheetsApiException(
+          'Apps Script endpoint not found. Check APPS_SCRIPT_URL.',
+        );
+      }
+      if (res.statusCode >= 500) {
+        throw SheetsApiException(
+          'The sheet service is having trouble (HTTP ${res.statusCode}). Please try again.',
+        );
+      }
+      throw SheetsApiException('Request failed (HTTP ${res.statusCode}).');
     }
     Map<String, dynamic> body;
     try {

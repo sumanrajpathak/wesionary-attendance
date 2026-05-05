@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/auth_provider.dart';
+import '../widgets/ui.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -25,10 +26,16 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final auth = context.watch<AuthProvider>();
     final busy = auth.busy;
 
     return Scaffold(
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        actions: const [ThemeToggleButton(), SizedBox(width: 4)],
+      ),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
@@ -39,32 +46,59 @@ class _LoginScreenState extends State<LoginScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Icon(Icons.event_available, size: 72, color: Colors.indigo),
-                  const SizedBox(height: 12),
-                  const Text(
+                  Container(
+                    width: 84,
+                    height: 84,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(24),
+                    ),
+                    child: Icon(
+                      Icons.event_available,
+                      size: 44,
+                      color: theme.colorScheme.onPrimaryContainer,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  Text(
                     'Office Attendance',
                     textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
+                    style: theme.textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Sign in to continue',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 36),
                   FilledButton.icon(
                     onPressed: busy ? null : () => _googleSignIn(context),
                     icon: const Icon(Icons.login),
-                    label: const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 12),
-                      child: Text('Sign in with Google'),
-                    ),
+                    label: const Text('Sign in with Google'),
                   ),
                   const SizedBox(height: 12),
                   TextButton(
                     onPressed: busy
                         ? null
-                        : () => setState(() => _showAdminForm = !_showAdminForm),
+                        : () =>
+                            setState(() => _showAdminForm = !_showAdminForm),
                     child: Text(
                       _showAdminForm ? 'Hide admin login' : 'Admin login',
                     ),
                   ),
-                  if (_showAdminForm) _buildAdminForm(context, busy),
+                  AnimatedSize(
+                    duration: const Duration(milliseconds: 200),
+                    curve: Curves.easeOut,
+                    child: _showAdminForm
+                        ? _buildAdminForm(context, busy)
+                        : const SizedBox.shrink(),
+                  ),
                   if (busy) ...[
                     const SizedBox(height: 16),
                     const Center(child: CircularProgressIndicator()),
@@ -92,7 +126,7 @@ class _LoginScreenState extends State<LoginScreen> {
               autocorrect: false,
               decoration: const InputDecoration(
                 labelText: 'Email',
-                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.alternate_email),
               ),
               validator: (v) =>
                   (v == null || v.trim().isEmpty) ? 'Required' : null,
@@ -103,7 +137,7 @@ class _LoginScreenState extends State<LoginScreen> {
               obscureText: true,
               decoration: const InputDecoration(
                 labelText: 'Password',
-                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.lock_outline),
               ),
               validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
             ),
@@ -111,10 +145,7 @@ class _LoginScreenState extends State<LoginScreen> {
             FilledButton.tonalIcon(
               onPressed: busy ? null : () => _adminSignIn(context),
               icon: const Icon(Icons.lock),
-              label: const Padding(
-                padding: EdgeInsets.symmetric(vertical: 10),
-                child: Text('Sign in as admin'),
-              ),
+              label: const Text('Sign in as admin'),
             ),
           ],
         ),
@@ -123,28 +154,24 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _googleSignIn(BuildContext context) async {
-    final messenger = ScaffoldMessenger.of(context);
     try {
       await context.read<AuthProvider>().loginWithGoogle();
     } catch (e) {
-      messenger.showSnackBar(
-        SnackBar(content: Text('$e'), backgroundColor: Colors.red),
-      );
+      if (!context.mounted) return;
+      showErrorSnack(context, e);
     }
   }
 
   Future<void> _adminSignIn(BuildContext context) async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
-    final messenger = ScaffoldMessenger.of(context);
     try {
       await context.read<AuthProvider>().loginAdmin(
             _emailCtrl.text.trim(),
             _passwordCtrl.text,
           );
     } catch (e) {
-      messenger.showSnackBar(
-        SnackBar(content: Text('$e'), backgroundColor: Colors.red),
-      );
+      if (!context.mounted) return;
+      showErrorSnack(context, e);
     }
   }
 }
